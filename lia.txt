@@ -1,0 +1,167 @@
+-- Minimal xxv3: keep only Anti + Desync tabs
+-- Based on the original paste you linked.
+
+-- settings
+getgenv().setting = {
+    Anti = { antilock = false, under = false, right = false, left = false },
+    Desync = { desync = false, desynctype = "Velocity" }
+}
+local setting = getgenv().setting
+
+-- shortcut globals
+getgenv().antilock = setting.Anti.antilock
+getgenv().under    = setting.Anti.under
+getgenv().right    = setting.Anti.right
+getgenv().left     = setting.Anti.left
+getgenv().desync   = setting.Desync.desync
+getgenv().desynctype = setting.Desync.desynctype
+
+-- services
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+-- UI library (kept for consistency)
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/LionTheGreatRealFrFr/MobileLinoriaLib/main/Library.lua"))()
+local Window = Library:CreateWindow({
+    Title = "xxv3 - Anti & Desync",
+    Center = true,
+    AutoShow = true,
+    Size = UDim2.new(0, 350, 0, 250)
+})
+
+-- Tabs
+local Tabs = {
+    Anti   = Window:AddTab("Anti"),
+    Desync = Window:AddTab("Desync")
+}
+
+-- === Anti Tab ===
+local AntiSettings = Tabs.Anti:AddLeftGroupbox("Anti Aim")
+
+AntiSettings:AddToggle("antilock", {
+    Text = "Sky",
+    Default = getgenv().antilock,
+    Callback = function(value)
+        getgenv().antilock = value
+        setting.Anti.antilock = value
+    end
+})
+
+AntiSettings:AddToggle("under", {
+    Text = "Under",
+    Default = getgenv().under,
+    Callback = function(value)
+        getgenv().under = value
+        setting.Anti.under = value
+    end
+})
+
+AntiSettings:AddToggle("right", {
+    Text = "Right",
+    Default = getgenv().right,
+    Callback = function(value)
+        getgenv().right = value
+        setting.Anti.right = value
+    end
+})
+
+AntiSettings:AddToggle("left", {
+    Text = "Left",
+    Default = getgenv().left,
+    Callback = function(value)
+        getgenv().left = value
+        setting.Anti.left = value
+    end
+})
+
+-- === Desync Tab ===
+local DesyncSettings = Tabs.Desync:AddLeftGroupbox("Desync")
+
+DesyncSettings:AddToggle("desync", {
+    Text = "Enable Desync",
+    Default = getgenv().desync,
+    Callback = function(value)
+        getgenv().desync = value
+        setting.Desync.desync = value
+    end
+})
+
+DesyncSettings:AddDropdown("desynctype", {
+    Values = {"Velocity", "CFrame"},
+    Default = getgenv().desynctype,
+    Multi = false,
+    Text = "Type",
+    Callback = function(value)
+        getgenv().desynctype = value
+        setting.Desync.desynctype = value
+    end
+})
+
+-- === Anti behaviors ===
+RunService.Heartbeat:Connect(function()
+    if getgenv().antilock then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local hrp = char.HumanoidRootPart
+            local original = hrp.Velocity
+            hrp.Velocity = Vector3.new(1,1,1) * (2^16)
+            RunService.RenderStepped:Wait()
+            hrp.Velocity = original
+        end
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    if getgenv().under then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local hrp = char.HumanoidRootPart
+            local original = hrp.Velocity
+            hrp.Velocity = Vector3.new(0,-1,0) * (2^16)
+            RunService.RenderStepped:Wait()
+            hrp.Velocity = original
+        end
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    if getgenv().right then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local hrp = char.HumanoidRootPart
+            local original = hrp.Velocity
+            hrp.Velocity = Vector3.new(1,0,0) * 65536
+            RunService.RenderStepped:Wait()
+            hrp.Velocity = original
+        end
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    if getgenv().left then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local hrp = char.HumanoidRootPart
+            local original = hrp.Velocity
+            hrp.Velocity = Vector3.new(-1,0,0) * 65536
+            RunService.RenderStepped:Wait()
+            hrp.Velocity = original
+        end
+    end
+end)
+
+-- === Desync behavior ===
+RunService.Heartbeat:Connect(function()
+    if getgenv().desync then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local hrp = char.HumanoidRootPart
+            if getgenv().desynctype == "Velocity" then
+                hrp.Velocity = Vector3.new(math.random(-100,100), math.random(-100,100), math.random(-100,100))
+            elseif getgenv().desynctype == "CFrame" then
+                hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(math.random(-180,180)), 0)
+            end
+        end
+    end
+end)
