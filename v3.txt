@@ -1,0 +1,301 @@
+-- Services
+local Players             = game:GetService("Players")
+local RunService          = game:GetService("RunService")
+local GuiService          = game:GetService("GuiService")
+local Workspace           = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local StarterGui          = game:GetService("StarterGui")
+
+-- Player refs
+local LocalPlayer = Players.LocalPlayer
+
+-- Config
+local LockParts        = { "HumanoidRootPart", "UpperTorso", "Head" }
+local LockPartIndex    = 1
+local SelectedLockPart = LockParts[LockPartIndex]
+
+local CamlockState        = false
+local LockedCharacter     = nil
+local Prediction          = 0.1768521
+local Smoothness          = 1
+local AutoPredictionState = false
+local AutoAirState        = false
+local AirOffset           = 0
+local LookAtState         = false
+local HighlightEnabled    = false
+local NotifyEnabled       = false
+local HealthCheckEnabled  = false
+local FriendCheckEnabled  = false
+
+local jumpConnection
+local currentHighlight
+
+-- Notification helper
+local function sendNotification(title, text)
+    StarterGui:SetCore("SendNotification", {
+        Title = title;
+        Text = text;
+        Duration = 3;
+    })
+end
+
+-- Find nearest valid model
+local function FindNearestEnemyPart()
+    local best, bestDist = nil, math.huge
+    local res    = GuiService:GetScreenResolution()
+    local center = Vector2.new(res.X/2, res.Y/2)
+    for _, mdl in ipairs(Workspace:GetDescendants()) do
+        if mdl:IsA("Model") then
+            local hum  = mdl:FindFirstChild("Humanoid")
+            local part = mdl:FindFirstChild(SelectedLockPart)
+            if hum and hum.Health > 0 and part and mdl ~= LocalPlayer.Character then
+                -- Health check
+                if HealthCheckEnabled and hum.Health <= 1 then
+                    continue
+                end
+                -- Friend check
+                local plr = Players:FindFirstChild(mdl.Name)
+                if FriendCheckEnabled and plr and LocalPlayer:IsFriendsWith(plr.UserId) then
+                    continue
+                end
+                local sp, onScreen = workspace.CurrentCamera:WorldToViewportPoint(part.Position)
+                if onScreen then
+                    local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                    if d < bestDist then
+                        bestDist, best = d, mdl
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- UI helpers
+local function makeUICorner(parent)
+    Instance.new("UICorner", parent).CornerRadius = UDim.new(0,6)
+end
+
+local function makeLabel(parent, text, pos)
+    local lbl = Instance.new("TextLabel", parent)
+    lbl.Text = text
+    lbl.Position = pos
+    lbl.Size = UDim2.new(0, 130, 0, 25)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Color3.new(1,1,1)
+    lbl.Font = Enum.Font.SourceSansSemibold
+    lbl.TextSize = 18
+    return lbl
+end
+
+local function makeBox(parent, name, pos, default)
+    local bx = Instance.new("TextBox", parent)
+    bx.Name, bx.Text = name, tostring(default)
+    bx.Position, bx.Size = pos, UDim2.new(0,130,0,25)
+    bx.BackgroundColor3, bx.TextColor3 = Color3.fromRGB(50,50,50), Color3.new(1,1,1)
+    bx.Font, bx.TextSize = Enum.Font.SourceSans, 18
+    makeUICorner(bx)
+    return bx
+end
+
+local function makeToggle(parent, name, pos, default, callback)
+    local btn = Instance.new("TextButton", parent)
+    btn.Name, btn.Text = name, name..(default and " ON" or " OFF")
+    btn.Position, btn.Size = pos, UDim2.new(0,130,0,25)
+    btn.Font, btn.TextSize, btn.TextColor3 = Enum.Font.SourceSansSemibold, 18, Color3.new(1,1,1)
+    btn.BackgroundColor3 = default and Color3.fromRGB(0,255,0) or Color3.fromRGB(255,0,0)
+    makeUICorner(btn)
+    btn.MouseButton1Click:Connect(function()
+        default = not default
+        btn.BackgroundColor3 = default and Color3.fromRGB(0,255,0) or Color3.fromRGB(255,0,0)
+        btn.Text = name..(default and " ON" or " OFF")
+        callback(default)
+    end)
+    return btn
+end
+
+-- Main GUI
+local gui = Instance.new("ScreenGui", game.CoreGui)
+gui.Name = "Ponchay"
+
+-- LockFrame
+local lockFrame = Instance.new("Frame", gui)
+lockFrame.Size, lockFrame.Position = UDim2.new(0,210,0,70), UDim2.new(0.5,-105,0.5,-40)
+lockFrame.BackgroundColor3, lockFrame.Active, lockFrame.Draggable = Color3.fromRGB(30,30,30), true, true
+makeUICorner(lockFrame)
+
+local lockBtn = Instance.new("TextButton", lockFrame)
+lockBtn.Size, lockBtn.Position = UDim2.new(0,180,0,40), UDim2.new(0.1,0,0.25,0)
+lockBtn.Font, lockBtn.TextSize, lockBtn.TextColor3 = Enum.Font.SourceSansSemibold,18,Color3.new(1,1,1)
+lockBtn.Text, lockBtn.BackgroundColor3 = "Ponchay OFF", Color3.fromRGB(255,0,0)
+makeUICorner(lockBtn)
+
+-- MainMenuFrame
+local menuFrame = Instance.new("Frame", gui)
+menuFrame.Size, menuFrame.Position = UDim2.new(0,300,0,380), UDim2.new(0.5,-150,0.5,-190)
+menuFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+menuFrame.Visible = false
+makeUICorner(menuFrame)
+
+-- Tabs
+local tabNames = { "Aimlock", "Settings" }
+local content = {}
+for i,name in ipairs(tabNames) do
+    local btn = Instance.new("TextButton", menuFrame)
+    btn.Size, btn.Position = UDim2.new(0,140,0,30), UDim2.new(0,(i-1)*150+5,0,5)
+    btn.Text, btn.Font, btn.TextSize, btn.TextColor3 = name,Enum.Font.SourceSansSemibold,18,Color3.new(1,1,1)
+    btn.BackgroundColor3 = Color3.fromRGB(50,50,50); makeUICorner(btn)
+    content[i] = Instance.new("Frame", menuFrame)
+    content[i].Size, content[i].Position = UDim2.new(1,-10,1,-50), UDim2.new(0,5,0,45)
+    content[i].BackgroundTransparency = 1
+    content[i].Visible = (i == 1)
+    btn.MouseButton1Click:Connect(function()
+        for j,f in ipairs(content) do f.Visible = (j==i) end
+    end)
+end
+
+local aimFrame = content[1]
+local settingsFrame = content[2]
+
+-- Aimlock UI
+makeLabel(aimFrame, "Prediction", UDim2.new(0,15,0,0))
+local pBox = makeBox(aimFrame, "PredictionBox", UDim2.new(0,15,0,35), Prediction)
+makeLabel(aimFrame, "Smoothness", UDim2.new(0,15,0,75))
+local sBox = makeBox(aimFrame, "SmoothnessBox", UDim2.new(0,15,0,110), Smoothness)
+makeLabel(aimFrame, "AirOffset", UDim2.new(0,15,0,150))
+local aoBox = makeBox(aimFrame, "AirOffsetBox", UDim2.new(0,15,0,185), AirOffset)
+makeToggle(aimFrame, "AutoPred", UDim2.new(0,155,0,0), AutoPredictionState, function(v) AutoPredictionState = v end)
+makeToggle(aimFrame, "AutoAir", UDim2.new(0,155,0,35), AutoAirState, function(v) AutoAirState = v end)
+makeToggle(aimFrame, "LookAt", UDim2.new(0,155,0,70), LookAtState, function(v) LookAtState = v end)
+
+local lpBtn = Instance.new("TextButton", aimFrame)
+lpBtn.Text = SelectedLockPart
+lpBtn.Position = UDim2.new(0,15,0,225)
+lpBtn.Size = UDim2.new(0,130,0,25)
+lpBtn.Font, lpBtn.TextSize = Enum.Font.SourceSansSemibold,18
+lpBtn.BackgroundColor3, lpBtn.TextColor3 = Color3.fromRGB(0,170,255),Color3.new(1,1,1)
+makeUICorner(lpBtn)
+lpBtn.MouseButton1Click:Connect(function()
+    LockPartIndex = (LockPartIndex % #LockParts) + 1
+    SelectedLockPart = LockParts[LockPartIndex]
+    lpBtn.Text = SelectedLockPart
+end)
+
+-- Settings UI
+makeToggle(settingsFrame, "Notify", UDim2.new(0,15,0,0), NotifyEnabled, function(v) NotifyEnabled = v end)
+makeToggle(settingsFrame, "Highlight", UDim2.new(0,15,0,40), HighlightEnabled, function(v)
+    HighlightEnabled = v
+    if not v and currentHighlight then currentHighlight:Destroy(); currentHighlight=nil end
+end)
+makeToggle(settingsFrame, "HealthCheck", UDim2.new(0,155,0,0), HealthCheckEnabled, function(v) HealthCheckEnabled = v end)
+makeToggle(settingsFrame, "FriendCheck", UDim2.new(0,155,0,40), FriendCheckEnabled, function(v) FriendCheckEnabled = v end)
+
+-- Menu toggle
+local menuBtn = Instance.new("TextButton", gui)
+menuBtn.Text, menuBtn.Size, menuBtn.Position = "Menu",UDim2.new(0,60,0,30),UDim2.new(1,-80,0,20)
+menuBtn.BackgroundColor3, menuBtn.TextColor3, menuBtn.Font, menuBtn.TextScaled =
+    Color3.fromRGB(255,0,0),Color3.new(1,1,1),Enum.Font.SourceSansSemibold,true
+makeUICorner(menuBtn)
+menuBtn.MouseButton1Click:Connect(function() menuFrame.Visible = not menuFrame.Visible end)
+
+-- Auto-apply inputs
+pBox.FocusLost:Connect(function(enter)
+    if enter then Prediction = tonumber(pBox.Text) or Prediction end
+end)
+sBox.FocusLost:Connect(function(enter)
+    if enter then Smoothness = tonumber(sBox.Text) or Smoothness end
+end)
+aoBox.FocusLost:Connect(function(enter)
+    if enter then AirOffset = tonumber(aoBox.Text) or AirOffset end
+end)
+
+-- Lock/unlock logic
+lockBtn.MouseButton1Click:Connect(function()
+    CamlockState = not CamlockState
+    lockBtn.Text = CamlockState and "Ponchay ON" or "Ponchay OFF"
+    lockBtn.BackgroundColor3 = CamlockState and Color3.fromRGB(0,255,0) or Color3.fromRGB(255,0,0)
+
+    if jumpConnection then
+        jumpConnection:Disconnect()
+        jumpConnection = nil
+    end
+
+    if CamlockState then
+        local mdl = FindNearestEnemyPart()
+        if mdl then
+            LockedCharacter = mdl
+            if NotifyEnabled then sendNotification("LOCKED TO", mdl.Name) end
+            local hum = mdl:FindFirstChild("Humanoid")
+            if hum then
+                jumpConnection = hum.Jumping:Connect(function(isJumping)
+                    if isJumping and AutoAirState and LockedCharacter then
+                        wait(0.1)
+                        local part = LockedCharacter:FindFirstChild(SelectedLockPart)
+                        if part then
+                            local cam = workspace.CurrentCamera
+                            local pos = part.Position
+                            if AutoPredictionState then pos = pos + part.Velocity * Prediction end
+                            local sp,on = cam:WorldToViewportPoint(pos)
+                            if on then
+                                VirtualInputManager:SendMouseButtonEvent(sp.X, sp.Y + AirOffset, 0, true, game, 1)
+                                VirtualInputManager:SendMouseButtonEvent(sp.X, sp.Y + AirOffset, 0, false, game, 1)
+                            end
+                        end
+                    end
+                end)
+            end
+        end
+    else
+        if NotifyEnabled and LockedCharacter then sendNotification("UNLOCKED", LockedCharacter.Name) end
+        LockedCharacter = nil
+        if currentHighlight then currentHighlight:Destroy(); currentHighlight = nil end
+    end
+end)
+
+-- Main loop: camera, look-at, highlight, auto-unlock on health
+RunService.Heartbeat:Connect(function()
+    if CamlockState and LockedCharacter then
+        local hum = LockedCharacter:FindFirstChild("Humanoid")
+        if HealthCheckEnabled and hum and hum.Health <= 1 then
+            -- auto-unlock
+            CamlockState = false
+            lockBtn.Text = "Ponchay OFF"
+            lockBtn.BackgroundColor3 = Color3.fromRGB(255,0,0)
+            if NotifyEnabled then sendNotification("UNLOCKED", LockedCharacter.Name) end
+            LockedCharacter = nil
+            if currentHighlight then currentHighlight:Destroy(); currentHighlight = nil end
+            return
+        end
+
+        local part = LockedCharacter:FindFirstChild(SelectedLockPart)
+        if part then
+            local cam = workspace.CurrentCamera
+            local targetPos = part.Position
+            if AutoPredictionState then targetPos = targetPos + part.Velocity * Prediction end
+            cam.CFrame = cam.CFrame:Lerp(CFrame.new(cam.CFrame.Position, targetPos), Smoothness)
+            if LookAtState then
+                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(targetPos.X, hrp.Position.Y, targetPos.Z))
+                end
+            end
+            if HighlightEnabled then
+                if currentHighlight then
+                    currentHighlight.Adornee = LockedCharacter
+                else
+                    local hl = Instance.new("Highlight")
+                    hl.Adornee = LockedCharacter
+                    hl.FillColor = Color3.fromRGB(255,0,0)
+                    hl.OutlineColor = Color3.fromRGB(255,255,255)
+                    hl.FillTransparency = 0.2
+                    hl.OutlineTransparency = 0
+                    hl.Parent = game.CoreGui
+                    currentHighlight = hl
+                end
+            end
+        end
+    elseif currentHighlight then
+        currentHighlight:Destroy()
+        currentHighlight = nil
+    end
+end)
